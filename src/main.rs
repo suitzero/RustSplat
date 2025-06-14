@@ -4,47 +4,38 @@ use winit::{
     window::Window,
     // dpi::PhysicalSize, // Not used in this placeholder main
 };
-// use wgpu::util::DeviceExt; // Keep for later, not strictly needed for this step
+// use wgpu::util::DeviceExt; // Keep for later
 
-// It's good practice to ensure these are in scope if create_surface relies on them.
-// However, wgpu might use its own re-exported raw_window_handle types.
-// If the build fails due to ambiguity or not finding these for winit::Window,
-// this might need adjustment or wgpu's re-exports might be preferred.
+// Required for instance.create_surface(window)
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
-
-struct State<'window> {
+struct State<'a> {
     #[allow(dead_code)]
     instance: wgpu::Instance,
     #[allow(dead_code)]
     adapter: wgpu::Adapter,
-    surface: wgpu::Surface<'window>,
+    surface: wgpu::Surface<'a>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
-    // window is last so it's dropped last, ensuring surface is dropped before window
-    window: Window,
+    // window is a reference, its lifetime 'a is tied to State's lifetime
+    #[allow(dead_code)]
+    window: &'a Window,
 }
 
-impl<'window> State<'window> {
-    async fn new(window: Window) -> Self {
+impl<'a> State<'a> {
+    async fn new(window: &'a Window) -> Self {
         let size = window.inner_size();
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
-            dx12_shader_compiler: Default::default(),
-            gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
-            flags: wgpu::InstanceFlags::default(), // Or VALIDATION for debug builds
-        });
-        println!("wgpu Instance created.");
+        // wgpu 0.18: Instance::new takes Backends directly
+        let instance = wgpu::Instance::new(wgpu::Backends::PRIMARY);
+        println!("wgpu Instance created (v0.18).");
 
         // The surface needs to live as long as the window that created it.
-        // State owns the window, and the lifetime 'window is tied to State, so this is safe.
-        // The create_surface function is unsafe because it relies on the caller to ensure
-        // that the window handle is valid for the lifetime of the surface.
-        let surface = unsafe { instance.create_surface(&window) }.unwrap();
-        println!("wgpu Surface created.");
+        // Unsafe because the window handle must be valid.
+        let surface = unsafe { instance.create_surface(window) }.unwrap();
+        println!("wgpu Surface created (v0.18).");
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -61,8 +52,8 @@ impl<'window> State<'window> {
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("Main Device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: if cfg!(target_arch = "wasm32") {
+                    features: wgpu::Features::empty(), // wgpu 0.18 uses 'features'
+                    limits: if cfg!(target_arch = "wasm32") { // wgpu 0.18 uses 'limits'
                         wgpu::Limits::downlevel_webgl2_defaults()
                     } else {
                         wgpu::Limits::default()
@@ -72,34 +63,31 @@ impl<'window> State<'window> {
             )
             .await
             .unwrap();
-        println!("wgpu Device and Queue created.");
+        println!("wgpu Device and Queue created (v0.18).");
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps.formats.iter()
             .copied()
-            .find(|f| f.is_srgb()) // Prefer sRGB for color textures
+            .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
         println!("Selected surface format: {:?}", surface_format);
 
-        let present_mode = if surface_caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
-            wgpu::PresentMode::Mailbox
-        } else {
-            wgpu::PresentMode::Fifo // Fifo is guaranteed to be supported
-        };
+        let present_mode = surface_caps.present_modes.first().copied().unwrap_or(wgpu::PresentMode::Fifo);
         println!("Selected present mode: {:?}", present_mode);
 
+        // SurfaceConfiguration for wgpu 0.18
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width: size.width,
             height: size.height,
             present_mode,
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            // alpha_mode in 0.18 is CompositeAlphaMode, not a slice like capabilities.alpha_modes
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque, // Default or choose from surface_caps.alpha_modes[0] if available
+            // view_formats does not exist in wgpu 0.18 SurfaceConfiguration
         };
         surface.configure(&device, &config);
-        println!("wgpu Surface configured.");
+        println!("wgpu Surface configured (v0.18).");
 
         Self {
             instance,
@@ -116,16 +104,16 @@ impl<'window> State<'window> {
 
 fn main() {
     env_logger::init();
-    println!("env_logger initialized. Main function placeholder for wgpu refactor.");
-    println!("The wgpu::State struct and State::new() are defined.");
-    println!("This version should compile successfully due to Cargo.toml changes for wgpu features.");
+    println!("env_logger initialized. Main function placeholder (for wgpu 0.18).");
+    println!("The wgpu::State struct and State::new() are defined for wgpu 0.18.");
+    println!("This version attempts to use wgpu 0.18 with rwh_05 feature.");
     println!("Next step will involve setting up the winit event loop and calling State::new().");
     // Example of how it might be called in the next step (do not uncomment yet):
     // use winit::event_loop::EventLoop;
     // use winit::window::WindowBuilder;
     // let event_loop = EventLoop::new();
     // let window = WindowBuilder::new().build(&event_loop).unwrap();
-    // let _state = pollster::block_on(State::new(window)); // _state to silence unused warning
+    // let _state = pollster::block_on(State::new(&window)); // Pass window as reference
     // event_loop.run(move |event, _, control_flow| {
     //     // ... event handling ...
     // });
