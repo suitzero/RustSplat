@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 winit = "0.28" # Or the latest compatible version
 raw-window-handle = "0.5" # Or the latest compatible version
-wgpu = { version = "0.18", features = ["rwh_05"] }
-pollster = "0.3"
+# wgpu = { version = "0.18", features = ["rwh_05"] } # Temporarily removed due to environment issues
+# pollster = "0.3" # Temporarily removed as it was for wgpu
 env_logger = "0.10"
+log = "0.4"
