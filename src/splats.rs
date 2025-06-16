@@ -55,3 +55,50 @@ pub fn get_sample_splats() -> Vec<GaussianSplat> {
         },
     ]
 }
+
+pub fn generate_procedural_splats(count_per_axis: u32, spacing: f32) -> Vec<GaussianSplat> {
+    let mut splats = Vec::new();
+    if count_per_axis == 0 { return splats; } // Avoid division by zero if count is 0
+
+    let half_extent = (count_per_axis -1) as f32 * spacing / 2.0; // Center the grid properly
+
+    for i in 0..count_per_axis {
+        for j in 0..count_per_axis {
+            for k in 0..count_per_axis {
+                let x = i as f32 * spacing - half_extent;
+                let y = j as f32 * spacing - half_extent;
+                let z = k as f32 * spacing - half_extent;
+
+                // Vary color based on position (simple gradient)
+                // Ensure valid range for color components (0-255)
+                let r_norm = (i as f32 / (count_per_axis.saturating_sub(1)).max(1) as f32).clamp(0.0, 1.0);
+                let g_norm = (j as f32 / (count_per_axis.saturating_sub(1)).max(1) as f32).clamp(0.0, 1.0);
+                let b_norm = (k as f32 / (count_per_axis.saturating_sub(1)).max(1) as f32).clamp(0.0, 1.0);
+
+                let r = (r_norm * 255.0) as u8;
+                let g = (g_norm * 255.0) as u8;
+                let b = (b_norm * 255.0) as u8;
+
+                // Vary scale slightly
+                let base_scale = spacing / 3.0; // Make scale relative to spacing
+                let scale_factor_variation = (i % 3 + j % 3 + k % 3) as f32 / 6.0; // Varies from 0.0 to 1.0
+                let scale_factor = 0.75 + scale_factor_variation * 0.5; // Range 0.75 to 1.25
+                let scale_val = base_scale * scale_factor;
+
+                // Simple rotation pattern: rotate around Y axis based on i
+                let angle_y = (i as f32 / count_per_axis as f32) * std::f32::consts::PI;
+                let rotation = [ (angle_y / 2.0).cos(), 0.0, (angle_y / 2.0).sin(), 0.0 ];
+
+                splats.push(GaussianSplat {
+                    position: [x, y, z],
+                    scale: [scale_val, scale_val, scale_val],
+                    rotation,
+                    color: [r, g, b, 255],
+                    // Vary opacity slightly based on position, ensuring it's within [0,1]
+                    opacity: (0.6 + (k as f32 / count_per_axis as f32) * 0.4).clamp(0.0,1.0),
+                });
+            }
+        }
+    }
+    splats
+}

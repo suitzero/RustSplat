@@ -1,17 +1,69 @@
 use winit::{
-    event::{Event, WindowEvent},
+    event::{Event, WindowEvent, VirtualKeyCode, ElementState}, // Added VirtualKeyCode, ElementState
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
     dpi::LogicalSize,
 };
 
 mod renderer;
-mod camera; // Added mod declaration
-mod splats; // Added mod declaration
+mod camera;
+mod splats;
 
 use renderer::{GraphicsBackend, MockRenderer};
-use camera::Camera; // Added import
-use splats::{GaussianSplat, get_sample_splats}; // Added imports
+use camera::Camera;
+use splats::{GaussianSplat, get_sample_splats, generate_procedural_splats};
+
+// --- Vec3 Math Helpers ---
+// These are simple implementations. A proper math library (glam, nalgebra) would be preferred
+// if dependencies were not an issue for the environment.
+#[inline]
+fn normalize_vec3(v: [f32; 3]) -> [f32; 3] {
+    let mag_sq = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    if mag_sq < f32::EPSILON * f32::EPSILON { // Check against a small epsilon
+        return [0.0, 0.0, 0.0];
+    }
+    let mag = mag_sq.sqrt();
+    [v[0] / mag, v[1] / mag, v[2] / mag]
+}
+
+#[inline]
+fn cross_product_vec3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+#[inline]
+fn add_vec3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+#[inline]
+fn sub_vec3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+#[inline]
+fn scale_vec3(v: [f32; 3], s: f32) -> [f32; 3] {
+    [v[0] * s, v[1] * s, v[2] * s]
+}
+// --- End of Vec3 Math Helpers ---
+
+#[derive(Debug, Default)]
+struct InputState {
+    is_forward_pressed: bool,
+    is_backward_pressed: bool,
+    is_left_pressed: bool,
+    is_right_pressed: bool,
+    is_up_pressed: bool,
+    is_down_pressed: bool,
+    is_yaw_left_pressed: bool,
+    is_yaw_right_pressed: bool,
+    is_pitch_up_pressed: bool,
+    is_pitch_down_pressed: bool,
+}
 
 struct App {
     renderer: Box<dyn GraphicsBackend>,
@@ -20,8 +72,8 @@ struct App {
     splats: Vec<GaussianSplat>,
     last_frame_time: std::time::Instant,
     frame_delta_time: f32,
-    // A simple accumulator for time to make animation smoother
     total_time_elapsed: f32,
+    input_state: InputState,
 }
 
 impl App {
@@ -29,24 +81,22 @@ impl App {
         let aspect_ratio = if initial_window_size.height > 0 {
             initial_window_size.width as f32 / initial_window_size.height as f32
         } else {
-            1.0 // Default aspect ratio if height is 0 to avoid division by zero
+            1.0
         };
 
         let camera = Camera::new(
-            [0.0, 0.5, 2.5], // position (slightly further back)
+            [0.0, 0.5, 3.0], // position (start slightly further back)
             [0.0, 0.0, 0.0], // target
             [0.0, 1.0, 0.0], // up
-            std::f32::consts::FRAC_PI_4, // fov_y_radians (45 degrees)
+            std::f32::consts::FRAC_PI_4,
             aspect_ratio,
-            0.1,  // near_plane
-            100.0, // far_plane
+            0.1,
+            100.0,
         );
 
-        let splats = get_sample_splats();
-        log::info!("App initialized with {} sample splats.", splats.len());
-        // Log camera initial state
+        let splats = generate_procedural_splats(5, 0.5); // New: 5x5x5 grid, 0.5 spacing
+        log::info!("App initialized with {} procedurally generated splats.", splats.len());
         log::info!("Initial Camera: {:?}", camera);
-
 
         Self {
             renderer,
@@ -55,6 +105,7 @@ impl App {
             last_frame_time: std::time::Instant::now(),
             frame_delta_time: 0.0,
             total_time_elapsed: 0.0,
+            input_state: InputState::default(),
         }
     }
 
@@ -65,25 +116,132 @@ impl App {
         self.total_time_elapsed += self.frame_delta_time;
     }
 
-    #[allow(dead_code)] // update_input is not called yet
-    fn update_input(&mut self /* winit::event::WindowEvent might be passed here later */) {
-        // Placeholder for input handling
+    fn process_keyboard_input(&mut self, keycode: Option<VirtualKeyCode>, state: ElementState) {
+        let pressed = state == ElementState::Pressed;
+        match keycode {
+            Some(VirtualKeyCode::W) | Some(VirtualKeyCode::Up) => self.input_state.is_forward_pressed = pressed,
+            Some(VirtualKeyCode::S) | Some(VirtualKeyCode::Down) => self.input_state.is_backward_pressed = pressed,
+            Some(VirtualKeyCode::A) | Some(VirtualKeyCode::Left) => self.input_state.is_left_pressed = pressed,
+            Some(VirtualKeyCode::D) | Some(VirtualKeyCode::Right) => self.input_state.is_right_pressed = pressed,
+            Some(VirtualKeyCode::Space) | Some(VirtualKeyCode::R) => self.input_state.is_up_pressed = pressed,
+            Some(VirtualKeyCode::LShift) | Some(VirtualKeyCode::LControl) | Some(VirtualKeyCode::F) => self.input_state.is_down_pressed = pressed,
+            Some(VirtualKeyCode::Q) => self.input_state.is_yaw_left_pressed = pressed,
+            Some(VirtualKeyCode::E) => self.input_state.is_yaw_right_pressed = pressed,
+            Some(VirtualKeyCode::T) => self.input_state.is_pitch_up_pressed = pressed,
+            Some(VirtualKeyCode::G) => self.input_state.is_pitch_down_pressed = pressed,
+            _ => {}
+        }
     }
 
     fn update_state(&mut self) {
         self.calculate_delta_time();
-        self.renderer.update(); // Call renderer's update
+        self.renderer.update();
 
-        // Update application logic, animations, physics, etc.
-        // Example: Simple camera orbit using total_time_elapsed for smoother animation
-        self.camera.position[0] = (self.total_time_elapsed * 0.4).sin() * 2.5;
-        self.camera.position[1] = 0.5 + (self.total_time_elapsed * 0.25).sin() * 0.5;
-        self.camera.position[2] = (self.total_time_elapsed * 0.4).cos() * 2.5;
+        let camera_speed = 2.0 * self.frame_delta_time; // Adjusted speed
+        let rotation_speed = 1.0 * self.frame_delta_time; // Adjusted speed
 
-        // Periodically log camera state if needed for debugging animation
-        // if (self.total_time_elapsed * 1000.0) as u64 % 1000 < 16 { // roughly every second
-        //    log::info!("Camera position: {:?}", self.camera.position);
-        // }
+        let mut new_pos = self.camera.position;
+        let mut new_target = self.camera.target;
+
+        // Forward is from camera eye to target
+        let forward_vec = normalize_vec3(sub_vec3(self.camera.target, self.camera.position));
+        // Right is perpendicular to forward and world up (or camera up if implementing roll)
+        let right_vec = normalize_vec3(cross_product_vec3(forward_vec, self.camera.up));
+        // Actual camera up vector (if implementing roll, this would need to be updated by rotations)
+        // let up_vec = self.camera.up; // For now, assume up is fixed relative to camera unless pitched. - currently unused
+                                     // For simple FPS-style up/down, use world_up_vec or camera_up_vec.
+        let world_up_vec = [0.0, 1.0, 0.0];
+
+
+        if self.input_state.is_forward_pressed {
+            new_pos = add_vec3(new_pos, scale_vec3(forward_vec, camera_speed));
+            // Target also moves with the camera to maintain direction
+            new_target = add_vec3(new_target, scale_vec3(forward_vec, camera_speed));
+        }
+        if self.input_state.is_backward_pressed {
+            new_pos = sub_vec3(new_pos, scale_vec3(forward_vec, camera_speed));
+            new_target = sub_vec3(new_target, scale_vec3(forward_vec, camera_speed));
+        }
+        if self.input_state.is_left_pressed {
+            new_pos = sub_vec3(new_pos, scale_vec3(right_vec, camera_speed));
+            new_target = sub_vec3(new_target, scale_vec3(right_vec, camera_speed));
+        }
+        if self.input_state.is_right_pressed {
+            new_pos = add_vec3(new_pos, scale_vec3(right_vec, camera_speed));
+            new_target = sub_vec3(new_target, scale_vec3(right_vec, camera_speed));
+        }
+        if self.input_state.is_up_pressed { // Move along world up
+            new_pos = add_vec3(new_pos, scale_vec3(world_up_vec, camera_speed));
+            new_target = add_vec3(new_target, scale_vec3(world_up_vec, camera_speed));
+        }
+        if self.input_state.is_down_pressed { // Move along world down
+            new_pos = sub_vec3(new_pos, scale_vec3(world_up_vec, camera_speed));
+            new_target = sub_vec3(new_target, scale_vec3(world_up_vec, camera_speed));
+        }
+
+        self.camera.position = new_pos;
+        // For rotations, calculate the direction vector from new_pos to new_target
+        let mut direction_vec = sub_vec3(new_target, new_pos);
+
+        // Yaw (around camera's current up vector - self.camera.up)
+        let yaw_angle = if self.input_state.is_yaw_left_pressed { rotation_speed }
+                        else if self.input_state.is_yaw_right_pressed { -rotation_speed }
+                        else { 0.0 };
+
+        if yaw_angle.abs() > f32::EPSILON {
+            let (s, c) = (yaw_angle.sin(), yaw_angle.cos());
+            // Rotate around self.camera.up (which is [0,1,0] initially)
+            // This is a simplified yaw assuming up is Y. For a generic camera_up, use Rodrigues' rotation formula or quaternions.
+            let x = direction_vec[0];
+            let z = direction_vec[2];
+            direction_vec[0] = x * c - z * s;
+            direction_vec[2] = x * s + z * c;
+        }
+
+        // Pitch (around camera's right vector)
+        let pitch_angle = if self.input_state.is_pitch_up_pressed { rotation_speed }
+                          else if self.input_state.is_pitch_down_pressed { -rotation_speed }
+                          else { 0.0 };
+
+        if pitch_angle.abs() > f32::EPSILON {
+            let (s, c) = (pitch_angle.sin(), pitch_angle.cos());
+            // let current_right_vec = normalize_vec3(cross_product_vec3(direction_vec, self.camera.up)); // Recalculate right based on current direction - currently unused
+
+            // Rotate direction_vec around current_right_vec (Rodrigues' rotation formula simplified)
+            // This is more complex than simple Y adjustment if we want to avoid gimbal lock / maintain up vector correctly.
+            // For a simpler pitch:
+            let y = direction_vec[1];
+            let planar_dist = (direction_vec[0]*direction_vec[0] + direction_vec[2]*direction_vec[2]).sqrt();
+            direction_vec[1] = y * c - planar_dist * s;
+            // And scale the planar components
+            let new_planar_dist = y * s + planar_dist * c;
+            if planar_dist > f32::EPSILON { // Avoid division by zero if looking straight up/down
+                 let scale_factor = new_planar_dist / planar_dist;
+                 direction_vec[0] *= scale_factor;
+                 direction_vec[2] *= scale_factor;
+            } else { // If looking straight up/down, pitch means moving along original up/down
+                 direction_vec[0] = 0.0; // Keep it aligned, or handle based on specific desired behavior
+                 direction_vec[2] = 0.0;
+            }
+            // Normalize to maintain constant distance to target focus point if desired, or let target move freely.
+            // direction_vec = normalize_vec3(direction_vec); // Optional: keep target at fixed distance
+
+            // Also need to rotate the camera's `up` vector to avoid issues when looking straight up/down.
+            // If not, `cross_product_vec3(forward_vec, self.camera.up)` for `right_vec` can become unstable.
+            // A full quaternion or rotation matrix approach for camera orientation is better for complex rotations.
+            // For now, let's update self.camera.up based on the new direction and a fixed world right/left.
+            // The up vector used for cross_product_vec3 to define right_vec inside calculate_view_matrix
+            // is self.camera.up. So, if we change self.camera.up here, it affects the next frame's controls.
+            let new_forward = normalize_vec3(direction_vec);
+            let global_right = [1.0, 0.0, 0.0]; // Simplification: assumes world right for camera 'up' calculation
+            let new_camera_up = normalize_vec3(cross_product_vec3(global_right, new_forward));
+            // Only update if the new_camera_up is not zero (which can happen if new_forward is parallel to global_right)
+            if (new_camera_up[0]*new_camera_up[0] + new_camera_up[1]*new_camera_up[1] + new_camera_up[2]*new_camera_up[2]) > f32::EPSILON * f32::EPSILON {
+                 self.camera.up = new_camera_up;
+            }
+        }
+
+        self.camera.target = add_vec3(new_pos, direction_vec);
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -95,7 +253,6 @@ impl App {
     }
 
     fn render(&mut self) -> Result<(), String> {
-        // Pass the application's splats and camera to the renderer
         self.renderer.render(&self.splats, &self.camera)
     }
 }
@@ -111,31 +268,21 @@ fn main() {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("Gaussian Splatting Renderer (Mock with App)")
-        .with_inner_size(LogicalSize::new(1024, 768)) // Slightly larger default
+        .with_inner_size(LogicalSize::new(1024, 768))
         .build(&event_loop)
         .expect("Failed to create window");
 
     log::info!("Winit window created: {:?}", window.id());
 
     let initial_size = window.inner_size();
-    let mock_renderer = MockRenderer::new(&window); // window is borrowed here
-    let mut app = App::new(Box::new(mock_renderer), initial_size); // App takes ownership of the Boxed renderer
-
-    // The window is owned by main's scope. App::new takes the renderer.
-    // MockRenderer::new(&window) means the MockRenderer *borrows* the window for its setup.
-    // This is fine as window outlives the MockRenderer's new() call.
-    // If MockRenderer stored &'a Window, App would need to manage that lifetime.
-    // But MockRenderer only stores window.id() and size, not a reference to window itself.
-    // The GraphicsBackend trait's new(window: &Window) implies the backend might store it,
-    // or use it just for setup. Our App struct does not store a reference to window,
-    // it would get it via the event loop if needed for input processing.
+    let mock_renderer = MockRenderer::new(&window);
+    let mut app = App::new(Box::new(mock_renderer), initial_size);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
 
         match event {
             Event::WindowEvent { window_id, event } if window_id == window.id() => {
-                // Future: Pass relevant events to app.input(&event) if input handling is added to App
                 match event {
                     WindowEvent::Resized(physical_size) => {
                         log::info!("Main: Window resized to {}x{}", physical_size.width, physical_size.height);
@@ -149,11 +296,21 @@ fn main() {
                         log::info!("Main: Window close requested. Exiting.");
                         *control_flow = ControlFlow::Exit;
                     }
-                    _ => (), // Other window events
+                    WindowEvent::KeyboardInput {
+                        input: winit::event::KeyboardInput {
+                            state,
+                            virtual_keycode,
+                            ..
+                        },
+                        ..
+                    } => {
+                        app.process_keyboard_input(virtual_keycode, state);
+                    }
+                    _ => (),
                 }
             }
             Event::RedrawRequested(event_window_id) if event_window_id == window.id() => {
-                app.update_state(); // Update app logic (which now also calls renderer.update())
+                app.update_state();
                 match app.render() {
                     Ok(_) => {}
                     Err(e) => {
